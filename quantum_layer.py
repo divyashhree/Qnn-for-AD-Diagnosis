@@ -109,8 +109,9 @@ class QuantumLayer(nn.Module):
         if norm > 1e-8:
             inputs = inputs / norm
         else:
+            # If all values are near zero, create a small non-zero state
             inputs = torch.zeros_like(inputs)
-            inputs[0] = 1.0
+            inputs[0] = 1e-8  # Small epsilon instead of 1.0
 
         # Amplitude encoding
         qml.AmplitudeEmbedding(

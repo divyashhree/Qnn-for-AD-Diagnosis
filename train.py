@@ -340,7 +340,8 @@ class Trainer:
 
                     if self.gradient_monitor.check_explosion(grad_norm):
                         logger.warning(f"Gradient explosion detected: {grad_norm:.2f}")
-                        # Skip this batch
+                        # Clear gradients before skipping
+                        self.optimizer.zero_grad()
                         continue
 
                 # Optimizer step

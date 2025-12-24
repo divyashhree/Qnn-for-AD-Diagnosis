@@ -174,8 +174,16 @@ class BiLSTMWithAttention(nn.Module):
                 nn.init.orthogonal_(param.data)
             elif 'bias' in name:
                 param.data.fill_(0)
-            elif 'weight' in name and len(param.shape) == 2:
+            elif 'weight' in name and isinstance(self._get_module_from_name(name), nn.Linear):
                 nn.init.xavier_uniform_(param.data)
+
+    def _get_module_from_name(self, name: str):
+        """Helper to get module from parameter name."""
+        parts = name.split('.')
+        module = self
+        for part in parts[:-1]:
+            module = getattr(module, part)
+        return module
 
     def forward(
         self,
