@@ -3,10 +3,10 @@
 
 # Data Configuration
 data:
-  dataset_path: "./data"  # Path to Kaggle EEG dataset
+  dataset_path: "C:\\Users\\ZSHREE\\Downloads\\quantum\\integrated_eeg_dataset.npz"  # Path to EEG dataset
   sampling_rate: 128  # Hz
-  window_size: 2.0  # seconds
-  overlap: 0.5  # 50% overlap between windows
+  window_size: 1.0  # seconds (128 samples at 128Hz)
+  overlap: 0.0  # No overlap needed - data is pre-segmented
   num_channels: 19  # Standard 10-20 EEG system
   bandpass_filter:
     low: 0.5  # Hz
@@ -43,7 +43,7 @@ quantum_layer:
 
 # Hybrid Model Configuration
 hybrid_model:
-  num_classes: 2  # Binary: Alzheimer's vs Healthy (change to 3+ for multi-class)
+  num_classes: 5  # Multi-class: 5 AD subtypes (change to 2 for binary)
   output_activation: "softmax"  # Use "sigmoid" for binary with BCELoss
 
 # Training Configuration

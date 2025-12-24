@@ -191,6 +191,21 @@ class EEGDataset(Dataset):
 
             # Calculate number of windows for this sample
             n_timepoints = signal_data.shape[-1]
+            
+            # If data is already the right size or smaller, use it as-is
+            if n_timepoints <= self.window_size:
+                window = signal_data
+                
+                # Apply preprocessing if available
+                if self.preprocessor is not None:
+                    window = self.preprocessor.bandpass_filter(window)
+                    window = self.preprocessor.remove_artifacts(window)
+                    window = self.preprocessor.normalize(window)
+                
+                all_windows.append(window)
+                all_labels.append(label)
+                continue
+            
             n_windows = (n_timepoints - self.window_size) // self.stride + 1
 
             for j in range(n_windows):
@@ -270,10 +285,26 @@ def load_eeg_data(
         if data_path.endswith('.npy'):
             data = np.load(data_path)
         elif data_path.endswith('.npz'):
+            # Try the integrated dataset format first
             loaded = np.load(data_path)
-            data = loaded['data']
-            labels = loaded['labels']
-            return data, labels
+            if 'X_raw' in loaded.keys() and 'y_labels' in loaded.keys():
+                # Use the dataset adapter for integrated_eeg_dataset.npz format
+                from dataset_adapter import load_integrated_eeg_dataset
+                num_classes = config.get('hybrid_model', {}).get('num_classes', 2)
+                binary = (num_classes == 2)
+                data, labels = load_integrated_eeg_dataset(
+                    data_path, 
+                    binary_classification=binary
+                )
+                return data, labels
+            elif 'data' in loaded.keys() and 'labels' in loaded.keys():
+                # Standard format
+                data = loaded['data']
+                labels = loaded['labels']
+                return data, labels
+            else:
+                logger.error(f"Unknown .npz format. Expected 'X_raw'/'y_labels' or 'data'/'labels' keys.")
+                return _create_dummy_data(config)
         elif data_path.endswith('.csv'):
             df = pd.read_csv(data_path)
             # Assume last column is label, rest are features
