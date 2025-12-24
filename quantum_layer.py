@@ -237,6 +237,10 @@ class QuantumLayer(nn.Module):
         # Stack outputs
         output = torch.stack(outputs)
 
+        # Ensure correct dtype (float32)
+        if output.dtype != torch.float32:
+            output = output.float()
+
         # Check for NaN in quantum output
         if torch.isnan(output).any():
             logger.warning("NaN detected in quantum circuit output, replacing with zeros")

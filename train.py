@@ -251,8 +251,7 @@ class Trainer:
                 mode='min',
                 patience=scheduler_config['patience'],
                 factor=scheduler_config['factor'],
-                min_lr=scheduler_config['min_lr'],
-                verbose=True
+                min_lr=scheduler_config['min_lr']
             )
         elif scheduler_type == 'cosine':
             return CosineAnnealingLR(
