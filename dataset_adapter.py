@@ -139,10 +139,8 @@ if __name__ == "__main__":
     
     logging.basicConfig(level=logging.INFO)
     
-    with open('config.yaml', 'r') as f:
-        config = yaml.safe_load(f)
-    
-    data_path = config['data']['dataset_path']
+    # Change dataset path to root folder
+    data_path = "./integrated_eeg_dataset.npz"
     
     print("\n" + "="*80)
     print("DATASET INFORMATION")

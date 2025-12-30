@@ -3,7 +3,7 @@
 
 # Data Configuration
 data:
-  dataset_path: "C:\\Users\\ZSHREE\\Downloads\\quantum\\integrated_eeg_dataset.npz"  # Path to EEG dataset
+  dataset_path: "./integrated_eeg_dataset.npz"  # Path to EEG dataset
   sampling_rate: 128  # Hz
   window_size: 1.0  # seconds (128 samples at 128Hz)
   overlap: 0.0  # No overlap needed - data is pre-segmented
@@ -14,8 +14,8 @@ data:
   train_split: 0.7
   val_split: 0.15
   test_split: 0.15
-  batch_size: 32
-  num_workers: 4
+  batch_size: 512
+  num_workers: 0
 
 # Classical Model Configuration
 classical_model:
@@ -48,7 +48,7 @@ hybrid_model:
 
 # Training Configuration
 training:
-  epochs: 100
+  epochs: 60
   learning_rate: 0.001
   weight_decay: 0.00001
   loss_function: "cross_entropy"  # Options: "cross_entropy", "bce"
