@@ -155,6 +155,14 @@ class Trainer:
         self.config = config
         self.device = device
 
+        # OPTIMIZATION: Enable mixed precision training for faster computation
+        self.use_amp = device.type == 'cuda'
+        if self.use_amp:
+            self.scaler = torch.amp.GradScaler('cuda')
+            logger.info("Automatic Mixed Precision (AMP) enabled for faster training")
+        else:
+            self.scaler = None
+
         # Setup loss function
         self.criterion = self._setup_loss_function()
 
@@ -303,6 +311,7 @@ class Trainer:
         correct = 0
         total = 0
         nan_count = 0
+        processed_batches = 0
 
         progress_bar = tqdm(
             train_loader,
@@ -317,37 +326,70 @@ class Trainer:
             self.optimizer.zero_grad()
 
             try:
-                # Forward pass
-                output = self.model(data)
-
-                # Calculate loss
-                loss = self.criterion(output, target)
-
-                # Check for NaN loss
-                if self._check_nan_loss(loss):
-                    nan_count += 1
-                    if nan_count > 5:
-                        logger.error("Too many NaN losses, stopping training")
-                        raise RuntimeError("Training failed due to NaN losses")
-                    continue
-
-                # Backward pass
-                loss.backward()
-
-                # Clip gradients and check for explosion
-                if self.config['training']['gradient_clipping']['enabled']:
-                    grad_norm = self.gradient_monitor.clip_gradients(self.model)
-
-                    if self.gradient_monitor.check_explosion(grad_norm):
-                        logger.warning(f"Gradient explosion detected: {grad_norm:.2f}")
-                        # Clear gradients before skipping
-                        self.optimizer.zero_grad()
+                # OPTIMIZATION: Use automatic mixed precision for faster training
+                if self.use_amp:
+                    with torch.amp.autocast('cuda'):
+                        # Forward pass
+                        output = self.model(data)
+                        # Calculate loss
+                        loss = self.criterion(output, target)
+                    
+                    # Check for NaN loss
+                    if self._check_nan_loss(loss):
+                        nan_count += 1
+                        if nan_count > 5:
+                            logger.error("Too many NaN losses, stopping training")
+                            raise RuntimeError("Training failed due to NaN losses")
                         continue
 
-                # Optimizer step
-                self.optimizer.step()
+                    # Backward pass with scaled gradients
+                    self.scaler.scale(loss).backward()
+
+                    # Clip gradients and check for explosion
+                    if self.config['training']['gradient_clipping']['enabled']:
+                        self.scaler.unscale_(self.optimizer)
+                        grad_norm = self.gradient_monitor.clip_gradients(self.model)
+
+                        if self.gradient_monitor.check_explosion(grad_norm):
+                            logger.warning(f"Gradient explosion detected: {grad_norm:.2f}")
+                            self.optimizer.zero_grad()
+                            continue
+
+                    # Optimizer step with scaler
+                    self.scaler.step(self.optimizer)
+                    self.scaler.update()
+                else:
+                    # Standard training without AMP
+                    # Forward pass
+                    output = self.model(data)
+                    # Calculate loss
+                    loss = self.criterion(output, target)
+
+                    # Check for NaN loss
+                    if self._check_nan_loss(loss):
+                        nan_count += 1
+                        if nan_count > 5:
+                            logger.error("Too many NaN losses, stopping training")
+                            raise RuntimeError("Training failed due to NaN losses")
+                        continue
+
+                    # Backward pass
+                    loss.backward()
+
+                    # Clip gradients and check for explosion
+                    if self.config['training']['gradient_clipping']['enabled']:
+                        grad_norm = self.gradient_monitor.clip_gradients(self.model)
+
+                        if self.gradient_monitor.check_explosion(grad_norm):
+                            logger.warning(f"Gradient explosion detected: {grad_norm:.2f}")
+                            self.optimizer.zero_grad()
+                            continue
+
+                    # Optimizer step
+                    self.optimizer.step()
 
                 # Update statistics
+                processed_batches += 1
                 total_loss += loss.item()
                 _, predicted = torch.max(output.data, 1)
                 total += target.size(0)
@@ -356,7 +398,8 @@ class Trainer:
                 # Update progress bar
                 progress_bar.set_postfix({
                     'loss': f'{loss.item():.4f}',
-                    'acc': f'{100.0 * correct / total:.2f}%'
+                    'acc': f'{100.0 * correct / total:.2f}%',
+                    'processed': processed_batches
                 })
 
                 # Log to tensorboard
@@ -369,12 +412,21 @@ class Trainer:
             except RuntimeError as e:
                 logger.error(f"Error in training batch {batch_idx}: {e}")
                 if "out of memory" in str(e):
-                    logger.warning("GPU OOM, clearing cache")
-                    torch.cuda.empty_cache()
-                continue
+                    continue
 
-        avg_loss = total_loss / len(train_loader)
+        # Handle case where no batches were successfully processed
+        if total == 0:
+            logger.error(f"No batches were successfully processed in this epoch!")
+            logger.error(f"Total batches attempted: {len(train_loader)}")
+            logger.error(f"Successfully processed: {processed_batches}")
+            logger.error(f"NaN count: {nan_count}")
+            return float('inf'), 0.0
+
+        avg_loss = total_loss / max(processed_batches, 1)
         accuracy = 100.0 * correct / total
+
+        logger.info(f"Processed {processed_batches}/{len(train_loader)} batches successfully")
+        return avg_loss, accuracyt / total
 
         return avg_loss, accuracy
 
@@ -673,6 +725,16 @@ def main():
     # Create model
     logger.info("Creating hybrid model...")
     model = create_hybrid_model(config, use_ensemble=False)
+
+    # OPTIMIZATION: Compile model with PyTorch 2.0+ for faster execution
+    try:
+        if hasattr(torch, 'compile'):
+            logger.info("Compiling model with torch.compile for optimized performance...")
+            # Only compile classical parts - quantum layer needs dynamic execution
+            model.classical_model = torch.compile(model.classical_model, mode='reduce-overhead')
+            logger.info("Model compilation successful!")
+    except Exception as e:
+        logger.warning(f"Model compilation not available or failed: {e}")
 
     total_params, trainable_params = count_parameters(model)
     logger.info(f"Total parameters: {total_params:,}")

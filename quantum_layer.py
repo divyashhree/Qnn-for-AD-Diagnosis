@@ -212,12 +212,19 @@ class QuantumLayer(nn.Module):
         if self.input_projection is not None:
             x = self.input_projection(x)
 
-        # Process each sample in the batch
-        outputs = []
-        for i in range(batch_size):
+        # OPTIMIZED: Process batch samples in parallel using ThreadPoolExecutor
+        # Utilizes multiple CPU cores for quantum circuit execution
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        import os
+        
+        # Use number of CPU cores (up to batch_size)
+        max_workers = min(os.cpu_count() or 4, batch_size, 16)
+        
+        def process_sample(idx):
+            """Process a single sample through quantum circuit."""
             try:
                 # Run quantum circuit
-                measurement = self.qnode(x[i], self.q_params)
+                measurement = self.qnode(x[idx], self.q_params)
 
                 # Convert to tensor
                 if isinstance(measurement, list):
@@ -228,12 +235,20 @@ class QuantumLayer(nn.Module):
                 elif not isinstance(measurement, torch.Tensor):
                     measurement = torch.tensor(measurement)
 
-                outputs.append(measurement)
+                return idx, measurement
 
             except Exception as e:
-                logger.error(f"Error in quantum circuit execution: {e}")
+                logger.error(f"Error in quantum circuit execution for sample {idx}: {e}")
                 # Return zeros in case of error
-                outputs.append(torch.zeros(self.n_qubits))
+                return idx, torch.zeros(self.n_qubits)
+        
+        # Process samples in parallel
+        outputs = [None] * batch_size
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(process_sample, i): i for i in range(batch_size)}
+            for future in as_completed(futures):
+                idx, result = future.result()
+                outputs[idx] = result
 
         # Stack outputs
         output = torch.stack(outputs)

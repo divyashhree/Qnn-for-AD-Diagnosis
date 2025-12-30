@@ -438,13 +438,14 @@ def create_dataloaders(
 
     logger.info(f"Dataset splits - Train: {train_size}, Val: {val_size}, Test: {test_size}")
 
-    # Create dataloaders
+    # Create dataloaders with optimized settings for high-end CPU
     train_loader = DataLoader(
         train_dataset,
         batch_size=config['data']['batch_size'],
         shuffle=True,
         num_workers=config['data']['num_workers'],
-        pin_memory=True
+        pin_memory=True,
+        prefetch_factor=2 if config['data']['num_workers'] > 0 else None  # Prefetch 2 batches per worker
     )
 
     val_loader = DataLoader(
@@ -452,7 +453,8 @@ def create_dataloaders(
         batch_size=config['data']['batch_size'],
         shuffle=False,
         num_workers=config['data']['num_workers'],
-        pin_memory=True
+        pin_memory=True,
+        prefetch_factor=2 if config['data']['num_workers'] > 0 else None
     )
 
     test_loader = DataLoader(
@@ -460,7 +462,8 @@ def create_dataloaders(
         batch_size=config['data']['batch_size'],
         shuffle=False,
         num_workers=config['data']['num_workers'],
-        pin_memory=True
+        pin_memory=True,
+        prefetch_factor=2 if config['data']['num_workers'] > 0 else None
     )
 
     return train_loader, val_loader, test_loader
