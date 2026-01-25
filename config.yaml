@@ -14,8 +14,8 @@ data:
   train_split: 0.7
   val_split: 0.15
   test_split: 0.15
-  batch_size: 512
-  num_workers: 0
+  batch_size: 256
+  num_workers: 4
 
 # Classical Model Configuration
 classical_model:
@@ -38,18 +38,19 @@ quantum_layer:
   encoding: "amplitude"  # Options: "amplitude", "angle"
   rotation_gates: ["RX", "RY", "RZ"]
   entangling_gate: "CNOT"
+  device: "lightning.qubit"  # Fast C++ backend with multi-threading
   measurement: "expval"  # Expectation value measurement
   diff_method: "best"  # Differentiation method for gradients
 
 # Hybrid Model Configuration
 hybrid_model:
-  num_classes: 5  # Multi-class: 5 AD subtypes (change to 2 for binary)
+  num_classes: 4  # Changed from 5 (removed ADSZ)
   output_activation: "softmax"  # Use "sigmoid" for binary with BCELoss
 
 # Training Configuration
 training:
   epochs: 60
-  learning_rate: 0.001
+  learning_rate: 0.00003
   weight_decay: 0.00001
   loss_function: "cross_entropy"  # Options: "cross_entropy", "bce"
   optimizer: "adam"
@@ -60,7 +61,7 @@ training:
     min_lr: 0.000001
   gradient_clipping:
     enabled: true
-    max_norm: 1.0
+    max_norm: 0.3
   early_stopping:
     enabled: true
     patience: 15
@@ -74,7 +75,7 @@ training:
 # Regularization & Stability
 regularization:
   dropout_rate: 0.3
-  label_smoothing: 0.1
+  label_smoothing: 0.0
   nan_handling:
     replace_with: 0.0
     check_frequency: 1  # Check every N batches
@@ -84,7 +85,7 @@ regularization:
 # Logging & Monitoring
 logging:
   log_dir: "./logs"
-  tensorboard: true
+  tensorboard: false  # Disabled due to numpy/tensorboard incompatibility
   log_interval: 10  # Log every N batches
   save_plots: true
   plot_dir: "./plots"

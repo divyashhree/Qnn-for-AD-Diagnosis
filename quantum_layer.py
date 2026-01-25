@@ -31,7 +31,7 @@ class QuantumLayer(nn.Module):
         output_dim: int,
         encoding: str = "amplitude",
         diff_method: str = "best",
-        device_name: str = "default.qubit"
+        device_name: str = "lightning.qubit"
     ):
         """
         Initialize Quantum Layer.
@@ -71,7 +71,7 @@ class QuantumLayer(nn.Module):
 
         # Initialize quantum parameters
         self.q_params = nn.Parameter(
-            torch.randn(self.n_params) * 0.1
+            torch.randn(self.n_params) * 0.01
         )
 
         # If input_dim doesn't match encoding requirements, add linear projection

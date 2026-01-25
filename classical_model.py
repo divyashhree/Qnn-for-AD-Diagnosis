@@ -142,6 +142,10 @@ class BiLSTMWithAttention(nn.Module):
         self.dropout_layers = nn.ModuleList([
             nn.Dropout(dropout) for _ in range(len(hidden_sizes))
         ])
+        self.batch_norm_layers = nn.ModuleList([
+            nn.BatchNorm1d(hidden_size * 2)  # *2 for bidirectional
+            for hidden_size in hidden_sizes
+        ])
 
         # Multi-Head Attention
         attention_dim = hidden_sizes[-1] * 2  # *2 for bidirectional
@@ -169,13 +173,17 @@ class BiLSTMWithAttention(nn.Module):
         """Initialize model weights using Xavier initialization."""
         for name, param in self.named_parameters():
             if 'weight_ih' in name:
-                nn.init.xavier_uniform_(param.data)
+                nn.init.xavier_uniform_(param.data, gain=0.5)  # Add gain < 1
             elif 'weight_hh' in name:
-                nn.init.orthogonal_(param.data)
+                nn.init.orthogonal_(param.data, gain=0.5)  # Add gain < 1
             elif 'bias' in name:
                 param.data.fill_(0)
+            # Add forget gate bias = 1 for LSTM stability
+            if 'bias_ih' in name or 'bias_hh' in name:
+                n = param.size(0)
+                param.data[n//4:n//2].fill_(1.0)  # Forget gate bias
             elif 'weight' in name and isinstance(self._get_module_from_name(name), nn.Linear):
-                nn.init.xavier_uniform_(param.data)
+                nn.init.xavier_uniform_(param.data, gain=0.5)
 
     def _get_module_from_name(self, name: str):
         """Helper to get module from parameter name."""
@@ -204,6 +212,8 @@ class BiLSTMWithAttention(nn.Module):
         # Input shape: (batch_size, num_channels, seq_len)
         # Transpose to (batch_size, seq_len, num_channels) for LSTM
         x = x.transpose(1, 2)
+        x = F.layer_norm(x, x.shape[-1:])
+        x = torch.clamp(x, -5.0, -5.0)  # Initial clamping to avoid extreme values
 
         # Check for NaN values
         if torch.isnan(x).any():
@@ -211,8 +221,11 @@ class BiLSTMWithAttention(nn.Module):
             x = torch.nan_to_num(x, nan=0.0)
 
         # Pass through LSTM layers
-        for i, (lstm, dropout) in enumerate(zip(self.lstm_layers, self.dropout_layers)):
+        for i, (lstm, dropout,bn) in enumerate(zip(self.lstm_layers, self.dropout_layers, self.batch_norm_layers)):
             x, (h_n, c_n) = lstm(x)
+            x = x.transpose(1,2)
+            x = bn(x)
+            x = x.transpose(1,2)
 
             # Apply dropout
             x = dropout(x)

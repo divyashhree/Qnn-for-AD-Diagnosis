@@ -13,6 +13,7 @@ from typing import Dict, Any, Optional, Tuple
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 from torch.optim.lr_scheduler import ReduceLROnPlateau, CosineAnnealingLR, StepLR
 from torch.utils.tensorboard import SummaryWriter
@@ -20,8 +21,27 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 
 from data_preprocessing import create_dataloaders
-from hybrid_model import create_hybrid_model, count_parameters
+from hybrid_model_test import create_hybrid_model
+from hybrid_model import count_parameters
+import argparse
+import logging
 
+# Command-line arguments
+parser = argparse.ArgumentParser(description='Train Hybrid Quantum-Classical Model')
+parser.add_argument('--no-quantum', action='store_true', 
+                   help='Disable quantum layer (classical model only)')
+parser.add_argument('--batch-size', type=int, default=None,
+                   help='Override batch size from config')
+parser.add_argument('--epochs', type=int, default=None,
+                   help='Override number of epochs')
+args = parser.parse_args()
+
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 # Setup logging
 logging.basicConfig(
     level=logging.INFO,
@@ -29,6 +49,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+class FocalLoss(nn.Module):
+    def __init__(self, alpha=None, gamma=2.0):
+        super().__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+    
+    def forward(self, inputs, targets):
+        ce_loss = F.cross_entropy(inputs, targets, weight=self.alpha, reduction='none')
+        pt = torch.exp(-ce_loss)
+        focal_loss = ((1 - pt) ** self.gamma) * ce_loss
+        return focal_loss.mean()
 
 class EarlyStopping:
     """Early stopping to stop training when validation loss doesn't improve."""
@@ -141,7 +172,8 @@ class Trainer:
         self,
         model: nn.Module,
         config: Dict[str, Any],
-        device: torch.device
+        device: torch.device,
+        class_weights: Optional[torch.Tensor] = None
     ):
         """
         Initialize trainer.
@@ -150,10 +182,12 @@ class Trainer:
             model: Model to train
             config: Configuration dictionary
             device: Device to train on
+            class_weights: Optional class weights for loss function
         """
         self.model = model.to(device)
         self.config = config
         self.device = device
+        self.class_weights = class_weights.to(device) if class_weights is not None else None
 
         # Setup loss function
         self.criterion = self._setup_loss_function()
@@ -205,8 +239,9 @@ class Trainer:
         loss_type = self.config['training']['loss_function']
 
         if loss_type == 'cross_entropy':
-            label_smoothing = self.config['regularization']['label_smoothing']
-            return nn.CrossEntropyLoss(label_smoothing=label_smoothing)
+            # Use Focal Loss with class weights instead of regular CrossEntropyLoss
+            logger.info("Using Focal Loss with class weights for imbalanced data")
+            return FocalLoss(alpha=self.class_weights, gamma=2.0)
         elif loss_type == 'bce':
             return nn.BCEWithLogitsLoss()
         else:
@@ -663,23 +698,87 @@ def main():
 
     logger.info(f"Using device: {device}")
 
-    # Create data loaders
-    logger.info("Creating data loaders...")
-    train_loader, val_loader, test_loader = create_dataloaders(config, seed=seed)
-    logger.info(f"Train batches: {len(train_loader)}, "
-               f"Val batches: {len(val_loader)}, "
-               f"Test batches: {len(test_loader)}")
+    # Load data using dataset adapter
+    from dataset_adapter import load_integrated_eeg_dataset
+    
+    logger.info("Loading data using dataset adapter...")
+    X_data, y_labels = load_integrated_eeg_dataset(
+        data_path='./integrated_eeg_dataset.npz',
+        binary_classification=False,
+        classes_to_keep=['AD-Auditory', 'ADFTD', 'ADFSU', 'APAVA-19']
+    )
+
+    logger.info(f"Data shape: {X_data.shape}")
+    logger.info(f"Labels shape: {y_labels.shape}")
+
+    # After filtering ADSZ, remap labels to 0,1,2,3
+    unique_labels = np.unique(y_labels)
+    label_mapping = {old: new for new, old in enumerate(unique_labels)}
+    y_labels = np.array([label_mapping[label] for label in y_labels])
+
+    logger.info(f"Remapped labels to range 0-{len(unique_labels)-1}")
+
+    # Convert to tensors
+    X_data = torch.tensor(X_data, dtype=torch.float32)
+    y_labels = torch.tensor(y_labels, dtype=torch.long)
+
+    # Show class distribution
+    unique, counts = np.unique(y_labels.numpy(), return_counts=True)
+    logger.info("Class distribution after loading:")
+    for cls, count in zip(unique, counts):
+        logger.info(f"  Class {cls}: {count} samples ({count/len(y_labels)*100:.1f}%)")
+
+    # Clean NaN/Inf
+    X_data = torch.nan_to_num(X_data, nan=0.0, posinf=1e6, neginf=-1e6)
+
+    # Normalize per channel
+    mean = X_data.mean(dim=(0, 2), keepdim=True)
+    std = X_data.std(dim=(0, 2), keepdim=True) + 1e-8
+    X_data = (X_data - mean) / std
+    X_data = torch.clamp(X_data, -10.0, 10.0)
+
+    logger.info(f"After normalization - Min: {X_data.min():.4f}, Max: {X_data.max():.4f}")
+
+    # Calculate class weights with stronger weighting
+    class_counts = torch.bincount(y_labels)
+    class_weights = torch.sqrt(1.0 / class_counts.float())
+    class_weights = class_weights / class_weights.sum() * len(class_counts)
+    logger.info(f"Class counts: {class_counts.tolist()}")
+    logger.info(f"Class weights: {class_weights.tolist()}")
+
+    # Create dataset splits
+    from torch.utils.data import TensorDataset, DataLoader, random_split
+    dataset = TensorDataset(X_data, y_labels)
+    
+    train_size = int(0.7 * len(dataset))
+    val_size = int(0.15 * len(dataset))
+    test_size = len(dataset) - train_size - val_size
+    
+    train_dataset, val_dataset, test_dataset = random_split(
+        dataset, [train_size, val_size, test_size],
+        generator=torch.Generator().manual_seed(seed)
+    )
+    
+    batch_size = args.batch_size if args.batch_size else config['data']['batch_size']
+    num_workers = config['data']['num_workers']
+    
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers, pin_memory=True)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True)
+    
+    logger.info(f"Train batches: {len(train_loader)}, Val batches: {len(val_loader)}, Test batches: {len(test_loader)}")
 
     # Create model
-    logger.info("Creating hybrid model...")
-    model = create_hybrid_model(config, use_ensemble=False)
+    use_quantum = not args.no_quantum
+    logger.info(f"Creating {'hybrid' if use_quantum else 'classical'} model...")
+    model = create_hybrid_model(config, use_quantum=use_quantum)
 
     total_params, trainable_params = count_parameters(model)
     logger.info(f"Total parameters: {total_params:,}")
     logger.info(f"Trainable parameters: {trainable_params:,}")
 
-    # Create trainer
-    trainer = Trainer(model, config, device)
+    # Create trainer with class weights
+    trainer = Trainer(model, config, device, class_weights=class_weights)
 
     # Check for existing checkpoint
     checkpoint_dir = config['training']['checkpoint']['checkpoint_dir']
